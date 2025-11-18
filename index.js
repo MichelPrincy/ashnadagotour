@@ -19,8 +19,51 @@ const supabase = createClient(
 // --- Multer (pour recevoir fichiers) ---
 const upload = multer({ dest: "uploads/" });
 
+/* ============================================================
+   📌 SYSTEME DE COMPTEUR DE VISITES
+============================================================ */
+
+// ▶️ Incrémenter le compteur
+app.get("/visit", async (req, res) => {
+  const { data: current, error: fetchErr } = await supabase
+    .from("stats")
+    .select("*")
+    .eq("id", 1)
+    .single();
+
+  if (fetchErr) return res.status(500).json(fetchErr);
+
+  const newCount = (current?.visits || 0) + 1;
+
+  const { error: updateErr } = await supabase
+    .from("stats")
+    .update({ visits: newCount })
+    .eq("id", 1);
+
+  if (updateErr) return res.status(500).json(updateErr);
+
+  res.json({ visits: newCount });
+});
+
+// ▶️ Obtenir le compteur
+app.get("/visits", async (req, res) => {
+  const { data, error } = await supabase
+    .from("stats")
+    .select("visits")
+    .eq("id", 1)
+    .single();
+
+  if (error) return res.status(500).json(error);
+
+  res.json(data);
+});
+
+/* ============================================================
+   📌 CRUD ITEMS
+============================================================ */
+
 // -------------------------
-// 📌 CREATE – Ajouter item
+// CREATE – Ajouter item
 // -------------------------
 app.post("/items", upload.single("image"), async (req, res) => {
   try {
@@ -32,13 +75,13 @@ app.post("/items", upload.single("image"), async (req, res) => {
     const filePath = `items/${Date.now()}-${file.originalname}`;
 
     // Upload dans Supabase Storage
-    const { data: storageData, error: storageError } = await supabase.storage
+    const { error: storageError } = await supabase.storage
       .from("items-images")
       .upload(filePath, fs.readFileSync(file.path), {
         contentType: file.mimetype,
       });
 
-    fs.unlinkSync(file.path); // delete temp file
+    fs.unlinkSync(file.path);
 
     if (storageError) return res.status(500).json(storageError);
 
@@ -65,7 +108,7 @@ app.post("/items", upload.single("image"), async (req, res) => {
 });
 
 // -------------------------
-// 📌 READ – Lire tout
+// READ – Lire tout
 // -------------------------
 app.get("/items", async (req, res) => {
   const { data, error } = await supabase
@@ -79,7 +122,7 @@ app.get("/items", async (req, res) => {
 });
 
 // -------------------------
-// 📌 READ BY ID
+// READ BY ID
 // -------------------------
 app.get("/items/:id", async (req, res) => {
   const { data, error } = await supabase
@@ -94,7 +137,7 @@ app.get("/items/:id", async (req, res) => {
 });
 
 // -------------------------
-// 📌 UPDATE (description seulement)
+// UPDATE
 // -------------------------
 app.put("/items/:id", async (req, res) => {
   const { description } = req.body;
@@ -111,10 +154,31 @@ app.put("/items/:id", async (req, res) => {
 });
 
 // -------------------------
-// 📌 DELETE
+// DELETE + SUPPRESSION IMAGE STORAGE
 // -------------------------
 app.delete("/items/:id", async (req, res) => {
-  const { data, error } = await supabase
+  // 1️⃣ Récupérer item
+  const { data: item, error: fetchErr } = await supabase
+    .from("items")
+    .select("*")
+    .eq("id", req.params.id)
+    .single();
+
+  if (fetchErr || !item) return res.status(404).json({ error: "Not found" });
+
+  // 2️⃣ Extraire le chemin du fichier dans Supabase Storage
+  const url = item.image_url;
+  const filePath = url.split("/items-images/")[1];
+
+  // 3️⃣ Supprimer fichier dans Supabase Storage
+  const { error: storageErr } = await supabase.storage
+    .from("items-images")
+    .remove([filePath]);
+
+  if (storageErr) console.log("Erreur suppression image :", storageErr);
+
+  // 4️⃣ Supprimer dans la base
+  const { error } = await supabase
     .from("items")
     .delete()
     .eq("id", req.params.id);
@@ -124,8 +188,9 @@ app.delete("/items/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-// -------------------------
-// Start Server
-// -------------------------
+/* ============================================================
+   SERVER
+============================================================ */
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("Server running on port " + port));
